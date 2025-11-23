@@ -1,0 +1,112 @@
+---
+title: "DS4420_Project_Bayesian"
+author: "Jing Cheng"
+date: "2025-11-20"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+library(data.table)
+library(brms)
+library(scoringRules)
+```
+
+```{r}
+# Load and format data
+df <- read.csv("household_power_cleaned.csv")
+setDT(df)
+df[, Datetime := as.POSIXct(Datetime, format = "%Y-%m-%d %H:%M:%S", tz = "UTC")]
+```
+
+```{r}
+# Subsample for faster modeling
+set.seed(123)
+subsample_size <- 100000
+df_sub <- df[sample(.N, subsample_size)]
+
+# Train/test split
+set.seed(123)
+n <- nrow(df_sub)
+train_idx <- sample(seq_len(n), size = round(0.8 * n))
+train <- df_sub[train_idx]
+test  <- df_sub[-train_idx]
+y_test <- test$Global_active_power
+```
+
+```{r, fig.width=12, fig.height=10}
+# Define priors 
+prior <- default_prior(
+  Global_active_power ~ Voltage + Global_reactive_power + Global_intensity,
+  data = train,
+  family = gaussian()
+)
+
+# Fit the Bayesian regression model
+power_brm <- brm(
+  Global_active_power ~ Voltage + Global_reactive_power + Global_intensity,,
+  family = gaussian(),
+  data = train,
+  chains = 4,
+  iter = 3000,
+  warmup = 1000,
+  thin = 2,
+  prior = prior,
+  control = list(adapt_delta = 0.95)
+)
+
+# Summary & convergence diagnostics
+summary(power_brm)
+plot(power_brm)
+bayes_R2(power_brm)
+```
+
+```{r}
+# Posterior predictive distribution
+pred_draws <- posterior_predict(power_brm, newdata = test)
+dim(pred_draws)
+
+# Example posterior predictive distribution for first test case
+example_ppd <- pred_draws[, 1]
+hist(example_ppd)
+mean(example_ppd)
+
+# Point predictions
+point_pred <- colMeans(pred_draws)
+```
+
+```{r}
+# Accuracy metrics
+rmse <- sqrt(mean((point_pred - y_test)^2))
+mae  <- mean(abs(point_pred - y_test))
+
+# CRPS
+crps_vals <- sapply(seq_along(y_test), function(j) {
+  crps_sample(y_test[j], pred_draws[, j])
+})
+mean_crps <- mean(crps_vals)
+
+# Predictive intervals
+lower <- apply(pred_draws, 2, quantile, probs = 0.025)
+upper <- apply(pred_draws, 2, quantile, probs = 0.975)
+coverage95 <- mean(y_test >= lower & y_test <= upper)
+interval_width <- mean(upper - lower)
+
+cat("RMSE:", rmse, "\n")
+cat("MAE:", mae, "\n")
+cat("CRPS:", mean_crps, "\n")
+cat("Coverage (95%):", coverage95, "\n")
+cat("Avg Interval Width:", interval_width, "\n")
+
+# Posterior summaries
+posterior_summary(power_brm)
+```
