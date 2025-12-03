@@ -1,2 +1,4 @@
 household_power_cleaned.csv
 household_power_consumption.csv
+.DS_Store
+.ipynb_checkpoints/
